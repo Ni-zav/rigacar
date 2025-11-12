@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+id = "rigacar"
+version = "8.1.0"
+name = "Rigacar (Generates Car Rig)"
+tagline = "Car rig generator with animation baking tools"
+maintainer = "David Gayerie"
+type = "add-on"
+website = "http://digicreatures.net/articles/rigacar.html"
+doc_url = "http://digicreatures.net/articles/rigacar.html"
+tracker_url = "https://github.com/digicreatures/rigacar/issues"
+category = ["Rigging"]
+blender_version_min = "4.2.0"
+blender_version_max = "4.2.99"
+license = ["GPL"]
+
+[build]
+type = "addon"
+paths = ["."]
+exclude_patterns = [".*", "__pycache__"]

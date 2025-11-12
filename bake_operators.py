@@ -19,6 +19,7 @@
 # <pep8 compliant>
 
 import bpy
+import bpy_extras.anim_utils
 import mathutils
 import math
 import itertools
@@ -33,7 +34,9 @@ def cursor(cursor_mode):
                 return func(self, context, *args, **kwargs)
             finally:
                 context.window.cursor_modal_restore()
+
         return wrapper
+
     return cursor_decorator
 
 
@@ -135,11 +138,38 @@ class QuaternionFCurvesEvaluator(object):
 
 def fix_old_steering_rotation(rig_object):
     """
-    Fix  armature generated with rigacar version < 6.0
+    Fix  armature generated with Rigacar version < 6.0
     """
     if rig_object.pose and rig_object.pose.bones:
         if 'MCH-Steering.rotation' in rig_object.pose.bones:
             rig_object.pose.bones['MCH-Steering.rotation'].rotation_mode = 'QUATERNION'
+
+
+def serialize_bake_options():
+    # For older versions than 4.1
+    if bpy.app.version < (4, 1, 0):
+        return dict(
+            only_selected=True,
+            do_pose=True,
+            do_object=False,
+            do_visual_keying=True
+        )
+    # For latest versions
+    return dict(bake_options=bpy_extras.anim_utils.BakeOptions(
+            only_selected=True,
+            do_pose=True,
+            do_object=False,
+            do_visual_keying=True,
+            do_constraint_clear=False,
+            do_parents_clear=False,
+            do_clean=False,
+            do_location=True,
+            do_scale=True,
+            do_rotation=True,
+            do_bbone=True,
+            do_custom_props=True
+        )
+    )
 
 
 class BakingOperator(object):
@@ -149,21 +179,31 @@ class BakingOperator(object):
 
     @classmethod
     def poll(cls, context):
-        return ('Car Rig' in context.object.data and
-                context.object.data['Car Rig'] and
+        return (context.object is not None and
+                context.object.data is not None and
+                'Car Rig' in context.object.data and
+                context.object.data.get('Car Rig') is not None and
                 context.object.mode in ('POSE', 'OBJECT'))
 
     def invoke(self, context, event):
-        if context.object.animation_data is None:
-            context.object.animation_data_create()
-        if context.object.animation_data.action is None:
-            context.object.animation_data.action = bpy.data.actions.new("%sAction" % context.object.name)
+        try:
+            if context.object.animation_data is None:
+                context.object.animation_data_create()
+            if context.object.animation_data.action is None:
+                context.object.animation_data.action = bpy.data.actions.new("%sAction" % context.object.name)
 
-        action = context.object.animation_data.action
-        self.frame_start = int(action.frame_range[0])
-        self.frame_end = int(action.frame_range[1])
+            action = context.object.animation_data.action
+            if action is None:
+                self.report({'ERROR'}, "Failed to create or access animation action")
+                return {'CANCELLED'}
+            
+            self.frame_start = int(action.frame_range[0])
+            self.frame_end = int(action.frame_range[1])
 
-        return context.window_manager.invoke_props_dialog(self)
+            return context.window_manager.invoke_props_dialog(self)
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to initialize bake operator: {str(e)}")
+            return {'CANCELLED'}
 
     def draw(self, context):
         self.layout.use_property_split = True
@@ -194,44 +234,49 @@ class BakingOperator(object):
 
     def _bake_action(self, context, *source_bones):
         action = context.object.animation_data.action
-        nla_tweak_mode = context.object.animation_data.use_tweak_mode if hasattr(context.object.animation_data, 'use_tweak_mode') else False
+        nla_tweak_mode = context.object.animation_data.use_tweak_mode if hasattr(context.object.animation_data,
+                                                                                 'use_tweak_mode') else False
 
         # saving context
         selected_bones = [b for b in context.object.data.bones if b.select]
         mode = context.object.mode
-        for b in selected_bones:
-            b.select = False
-
-        bpy.ops.object.mode_set(mode='OBJECT')
         source_bones_matrix_basis = []
-        for source_bone in source_bones:
-            source_bones_matrix_basis.append(context.object.pose.bones[source_bone.name].matrix_basis.copy())
-            source_bone.select = True
+        
+        try:
+            for b in selected_bones:
+                b.select = False
 
-        # Blender 2.81 : Another hack for another bug in the bake operator
-        # removing from the selection objects which are not the current one
-        for obj in context.selected_objects:
-            if obj is not context.object:
-                obj.select_set(state=False)
+            bpy.ops.object.mode_set(mode='OBJECT')
+            for source_bone in source_bones:
+                source_bones_matrix_basis.append(context.object.pose.bones[source_bone.name].matrix_basis.copy())
+                source_bone.select = True
 
-        bpy.ops.nla.bake(frame_start=self.frame_start, frame_end=self.frame_end, only_selected=True, bake_types={'POSE'}, visual_keying=True)
-        baked_action = context.object.animation_data.action
+            bake_options = serialize_bake_options()
+            baked_action = bpy_extras.anim_utils.bake_action(
+                context.object,
+                action=None,
+                frames=range(self.frame_start, self.frame_end + 1),
+                **bake_options
+            )
 
-        # restoring context
-        for source_bone, matrix_basis in zip(source_bones, source_bones_matrix_basis):
-            context.object.pose.bones[source_bone.name].matrix_basis = matrix_basis
-            source_bone.select = False
-        for b in selected_bones:
-            b.select = True
+            return baked_action
+        finally:
+            # restoring context - guaranteed to run even on exception
+            try:
+                for source_bone, matrix_basis in zip(source_bones, source_bones_matrix_basis):
+                    context.object.pose.bones[source_bone.name].matrix_basis = matrix_basis
+                    source_bone.select = False
+                for b in selected_bones:
+                    b.select = True
 
-        bpy.ops.object.mode_set(mode=mode)
+                bpy.ops.object.mode_set(mode=mode)
 
-        if nla_tweak_mode:
-            context.object.animation_data.use_tweak_mode = nla_tweak_mode
-        else:
-            context.object.animation_data.action = action
-
-        return baked_action
+                if nla_tweak_mode:
+                    context.object.animation_data.use_tweak_mode = nla_tweak_mode
+                else:
+                    context.object.animation_data.action = action
+            except Exception as e:
+                print(f"Warning: Failed to fully restore context: {str(e)}")
 
 
 class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
@@ -261,6 +306,10 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
 
         bones = set(wheel_bones + brake_bones)
         baked_action = self._bake_action(context, *bones)
+
+        if baked_action is None:
+            self.report({'WARNING'}, "Existing action failed to bake. Won't bake wheel rotation")
+            return
 
         try:
             for wheel_bone, brake_bone in zip(wheel_bones, brake_bones):
@@ -301,6 +350,10 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
 
     def _bake_wheel_rotation(self, context, baked_action, bone, brake_bone):
         fc_rot = create_property_animation(context, bone.name.replace('MCH-', ''))
+
+        # Reset the transform of the wheel bone, otherwise baking yields wrong results
+        pb: bpy.types.PoseBone = context.object.pose.bones[bone.name]
+        pb.matrix_basis.identity()
 
         for f, distance in self._evaluate_distance_per_frame(baked_action, bone, brake_bone):
             kf = fc_rot.keyframe_points.insert(f, distance)
@@ -362,10 +415,12 @@ class ANIM_OT_carSteeringBake(bpy.types.Operator, BakingOperator):
             length_ratio = bone_offset * self.rotation_factor / projected_steering_direction
             steering_direction_vector *= length_ratio
 
-            steering_position = mathutils.geometry.distance_point_to_plane(steering_direction_vector, world_space_bone_direction_vector, world_space_bone_normal_vector)
+            steering_position = mathutils.geometry.distance_point_to_plane(steering_direction_vector,
+                                                                           world_space_bone_direction_vector,
+                                                                           world_space_bone_normal_vector)
 
             if previous_steering_position is not None \
-               and abs(steering_position - previous_steering_position) < steering_threshold:
+                    and abs(steering_position - previous_steering_position) < steering_threshold:
                 continue
 
             yield f, steering_position
@@ -377,15 +432,24 @@ class ANIM_OT_carSteeringBake(bpy.types.Operator, BakingOperator):
         clear_property_animation(context, 'Steering.rotation')
         fix_old_steering_rotation(context.object)
         fc_rot = create_property_animation(context, 'Steering.rotation')
-        action = self._bake_action(context, bone)
+
+        baked_action = self._bake_action(context, bone)
+        if baked_action is None:
+            self.report({'WARNING'}, "Existing action failed to bake. Won't bake steering rotation")
+            return
 
         try:
-            for f, steering_pos in self._evaluate_rotation_per_frame(action, bone_offset, bone):
+            # Reset the transform of the steering bone, because baking action manipulates the transform
+            # and evaluate_rotation_frame expects it at it's default position
+            pb: bpy.types.PoseBone = context.object.pose.bones[bone.name]
+            pb.matrix_basis.identity()
+
+            for f, steering_pos in self._evaluate_rotation_per_frame(baked_action, bone_offset, bone):
                 kf = fc_rot.keyframe_points.insert(f, steering_pos)
                 kf.type = 'JITTER'
                 kf.interpolation = 'LINEAR'
         finally:
-            bpy.data.actions.remove(action)
+            bpy.data.actions.remove(baked_action)
 
 
 class ANIM_OT_carClearSteeringWheelsRotation(bpy.types.Operator):
@@ -394,8 +458,10 @@ class ANIM_OT_carClearSteeringWheelsRotation(bpy.types.Operator):
     bl_description = "Clear generated rotation for steering and wheels"
     bl_options = {'REGISTER', 'UNDO'}
 
-    clear_steering: bpy.props.BoolProperty(name="Steering", description="Clear generated animation for steering", default=True)
-    clear_wheels: bpy.props.BoolProperty(name="Wheels", description="Clear generated animation for wheels", default=True)
+    clear_steering: bpy.props.BoolProperty(name="Steering", description="Clear generated animation for steering",
+                                           default=True)
+    clear_wheels: bpy.props.BoolProperty(name="Wheels", description="Clear generated animation for wheels",
+                                         default=True)
 
     def draw(self, context):
         self.layout.use_property_decorate = False
@@ -405,7 +471,11 @@ class ANIM_OT_carClearSteeringWheelsRotation(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.object is not None and context.object.data is not None and context.object.data.get('Car Rig')
+        return (context.object is not None and 
+                context.object.data is not None and 
+                'Car Rig' in context.object.data and
+                context.object.data.get('Car Rig') is not None and
+                context.object.mode in ('POSE', 'OBJECT'))
 
     def execute(self, context):
         re_wheel_propname = re.compile(r'^Wheel\.rotation\.(Ft|Bk)\.[LR](\.\d+)?$')
