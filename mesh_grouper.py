@@ -28,10 +28,14 @@ RIG_GROUPS = {
     'Wheel Front Right': 'Wheel.Ft.R',
     'Wheel Back Left': 'Wheel.Bk.L',
     'Wheel Back Right': 'Wheel.Bk.R',
+    'Wheel Back Left Extra': 'Wheel.Bk.L.001',
+    'Wheel Back Right Extra': 'Wheel.Bk.R.001',
     'WheelBrake Front Left': 'WheelBrake.Ft.L',
     'WheelBrake Front Right': 'WheelBrake.Ft.R',
     'WheelBrake Back Left': 'WheelBrake.Bk.L',
     'WheelBrake Back Right': 'WheelBrake.Bk.R',
+    'WheelBrake Back Left Extra': 'WheelBrake.Bk.L.001',
+    'WheelBrake Back Right Extra': 'WheelBrake.Bk.R.001',
     'Steering': 'Steering',
 }
 
@@ -113,8 +117,22 @@ def create_group_operator(group_label: str, suffix: str):
             else:  # MESH
                 prefix = get_base_mesh_name(selected_meshes[0].name)
             
-            # Create combined object name
-            combined_name = f"{prefix}.{suffix}"
+            # Create combined object name with auto-increment for duplicates
+            base_name = f"{prefix}.{suffix}"
+            combined_name = base_name
+            counter = 1
+            
+            # If the base suffix already has a number (like .001), increment it
+            if suffix.endswith('.001'):
+                base_suffix = suffix[:-4]  # Remove .001
+                while bpy.data.objects.get(combined_name) is not None:
+                    combined_name = f"{prefix}.{base_suffix}.{counter:03d}"
+                    counter += 1
+            else:
+                # For non-numbered suffixes, just ensure uniqueness
+                while bpy.data.objects.get(combined_name) is not None:
+                    combined_name = f"{base_name}.{counter:03d}"
+                    counter += 1
             
             # Join all selected meshes and set origin
             join_meshes_and_set_origin(selected_meshes, context, combined_name)
@@ -182,12 +200,22 @@ class MESH_GROUPER_PT_mesh_grouping(bpy.types.Panel):
             row.operator("mesh_grouper.group_wheel_bk_l", text="Wheel BL")
             row.operator("mesh_grouper.group_wheel_bk_r", text="Wheel BR")
             
+            # Extra back wheel buttons on one line
+            row = box.row()
+            row.operator("mesh_grouper.group_wheel_bk_l_001", text="Wheel BL Extra")
+            row.operator("mesh_grouper.group_wheel_bk_r_001", text="Wheel BR Extra")
+            
             # WheelBrake buttons on one line
             row = box.row()
             row.operator("mesh_grouper.group_wheelbrake_ft_l", text="Brake FL")
             row.operator("mesh_grouper.group_wheelbrake_ft_r", text="Brake FR")
             row.operator("mesh_grouper.group_wheelbrake_bk_l", text="Brake BL")
             row.operator("mesh_grouper.group_wheelbrake_bk_r", text="Brake BR")
+            
+            # Extra back WheelBrake buttons on one line
+            row = box.row()
+            row.operator("mesh_grouper.group_wheelbrake_bk_l_001", text="Brake BL Extra")
+            row.operator("mesh_grouper.group_wheelbrake_bk_r_001", text="Brake BR Extra")
             
             # Steering button
             row = box.row()
