@@ -1399,6 +1399,7 @@ class OBJECT_OT_armatureCarDeformationRig(bpy.types.Operator):
         return b
 
     def _create_wheel_bones(self, rig, base_wheel_name, nb_wheels, delta_pos):
+        previous_wheel_default_pos = self.bones_position[base_wheel_name]
         for wheel_name in name_range(base_wheel_name, nb_wheels):
             if wheel_name not in self.bones_position:
                 wheel_position = previous_wheel_default_pos.copy()

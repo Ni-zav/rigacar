@@ -18,32 +18,19 @@
 
 # <pep8 compliant>
 
-bl_info = {
-    "name": "Rigacar (Generates Car Rig)",
-    "author": "David Gayerie",
-    "version": (8, 0),
-    "blender": (4, 0, 0),
-    "location": "View3D > Add > Armature",
-    "description": "Adds a deformation rig for vehicules, generates animation rig and bake wheels animation.",
-    "wiki_url": "http://digicreatures.net/articles/rigacar.html",
-    "tracker_url": "https://github.com/digicreatures/rigacar/issues",
-    "category": "Rigging"
-}
+import bpy
+import importlib
+from . import bake_operators
+from . import car_rig
+from . import widgets
+from . import mesh_grouper
 
+# Handle reload on script re-execution
 if "bpy" in locals():
-    import importlib
-
-    if "bake_operators" in locals():
-        importlib.reload(bake_operators)
-    if "car_rig" in locals():
-        importlib.reload(car_rig)
-    if "widgets" in locals():
-        importlib.reload(widgets)
-else:
-    import bpy
-    from . import bake_operators
-    from . import car_rig
-    from . import widgets
+    importlib.reload(bake_operators)
+    importlib.reload(car_rig)
+    importlib.reload(widgets)
+    importlib.reload(mesh_grouper)
 
 
 def enumerate_ground_sensors(bones):
@@ -209,9 +196,11 @@ def register():
         bpy.utils.register_class(c)
     car_rig.register()
     bake_operators.register()
+    mesh_grouper.register()
 
 
 def unregister():
+    mesh_grouper.unregister()
     bake_operators.unregister()
     car_rig.unregister()
     for c in classes:

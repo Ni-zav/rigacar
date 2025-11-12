@@ -15,5 +15,5 @@ license = ["GPL"]
 
 [build]
 type = "addon"
-paths = ["."]
+paths = ["__init__.py", "bake_operators.py", "car_rig.py", "mesh_grouper.py", "widgets.py"]
 exclude_patterns = [".*", "__pycache__"]
