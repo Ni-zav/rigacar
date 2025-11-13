@@ -97,10 +97,25 @@ def create_bone_group(pose, group_name, color_set, bone_names):
 
 
 def name_range(prefix, nb=1000):
-    if nb > 0:
-        yield prefix
-        for i in range(1, nb):
-            yield '%s.%03d' % (prefix, i)
+    """Generate sequential names for wheels/brakes.
+    For new naming convention: Wheel_FR_0, Wheel_FR_1, Wheel_FR_2, etc.
+    """
+    # Check if prefix already has a number at the end (new format)
+    import re
+    match = re.match(r'^(.+)_(\d+)$', prefix)
+    if match:
+        base_prefix = match.group(1)
+        start_num = int(match.group(2))
+        if nb > 0:
+            yield prefix
+            for i in range(1, nb):
+                yield f'{base_prefix}_{start_num + i}'
+    else:
+        # Old format or Body/Steering - keep as is
+        if nb > 0:
+            yield prefix
+            for i in range(1, nb):
+                yield '%s.%03d' % (prefix, i)
 
 
 def get_widget(name):
@@ -133,7 +148,8 @@ def dispatch_bones_to_armature_layers(ob):
     mch_bone_layer.is_visible = False
 
     # get MCH bone
-    re_mch_bone = re.compile(r'^MCH-Wheel(Brake)?\.(Ft|Bk)\.[LR](\.\d+)?$')
+    # Matches: MCH-Wheel_FR_0, MCH-Wheel_FL_1, MCH-Brake_BR_2, etc.
+    re_mch_bone = re.compile(r'^MCH-(Wheel|Brake)_[FB][LR]_\d+$')
 
     for b in ob.data.bones:
         if b.name.startswith('DEF-'):
@@ -167,13 +183,20 @@ class NameSuffix(object):
         self.position = position
         self.side = side
         self.index = index
-        if index == 0:
-            self.value = '%s.%s' % (position, side)
-        else:
-            self.value = '%s.%s.%03d' % (position, side, index)
+        # Generate value in new format: FR_0, FR_1, BL_2, etc.
+        # position: 'Ft' or 'Bk', side: 'L' or 'R'
+        pos_abbr = 'F' if position == 'Ft' else 'B'
+        self.value = f'{pos_abbr}{side}_{index}'
 
     def name(self, base_name=None):
-        return '%s.%s' % (base_name, self.value) if base_name else self.value
+        if base_name:
+            # Handle cases like 'MCH-Wheel.rotation' -> 'MCH-Wheel_FR_0.rotation'
+            if '.' in base_name:
+                parts = base_name.rsplit('.', 1)
+                return f'{parts[0]}_{self.value}.{parts[1]}'
+            else:
+                return f'{base_name}_{self.value}'
+        return self.value
 
     @property
     def is_front(self):
@@ -285,8 +308,11 @@ class WheelsDimension(object):
         self.position = position
         self.side_position = side_position
         self.wheels = []
+        # Generate new naming pattern: DEF-Wheel_FR_0, DEF-Wheel_FR_1, etc.
+        pos_abbr = 'F' if position == 'Ft' else 'B'
+        base_wheel_suffix = f'{pos_abbr}{side_position}_0'
         wheel_bones = (armature.data.edit_bones.get(name) for name in
-                       name_range('DEF-Wheel.%s.%s' % (self.position, self.side_position)))
+                       name_range(f'DEF-Wheel_{base_wheel_suffix}'))
         for wheel_bone in wheel_bones:
             if wheel_bone is None:
                 break
@@ -297,12 +323,15 @@ class WheelsDimension(object):
             yield NameSuffix(self.position, self.side_position, i)
 
     def names(self, base_name=None):
-        for name_suffix in name_range('%s.%s' % (self.position, self.side_position), self.nb):
-            yield '%s.%s' % (base_name, name_suffix) if base_name else name_suffix
+        pos_abbr = 'F' if self.position == 'Ft' else 'B'
+        base_suffix = f'{pos_abbr}{self.side_position}_0'
+        for name_suffix in name_range(base_suffix, self.nb):
+            yield f'{base_name}_{name_suffix}' if base_name else name_suffix
 
     def name(self, base_name=None):
-        suffix = '%s.%s' % (self.position, self.side_position)
-        return '%s.%s' % (base_name, suffix) if base_name else suffix
+        pos_abbr = 'F' if self.position == 'Ft' else 'B'
+        suffix = f'{pos_abbr}{self.side_position}_0'
+        return f'{base_name}_{suffix}' if base_name else suffix
 
     @property
     def nb(self):
@@ -611,8 +640,8 @@ class ArmatureGenerator(object):
             self.generate_wheel_damper(wheel_dimension, base_bone_parent)
 
         if self.dimension.has_front_wheels:
-            wheel_ft_r = amt.edit_bones.get('DEF-Wheel.Ft.R')
-            wheelFtL = amt.edit_bones.get('DEF-Wheel.Ft.L')
+            wheel_ft_r = amt.edit_bones.get('DEF-Wheel_FR_0')
+            wheelFtL = amt.edit_bones.get('DEF-Wheel_FL_0')
 
             axis_ft = amt.edit_bones.new('MCH-Axis.Ft')
             axis_ft.head = wheel_ft_r.head
@@ -642,8 +671,8 @@ class ArmatureGenerator(object):
             steering.parent = steering_rotation
 
         if self.dimension.has_back_wheels:
-            wheel_bk_r = amt.edit_bones.get('DEF-Wheel.Bk.R')
-            wheel_bk_l = amt.edit_bones.get('DEF-Wheel.Bk.L')
+            wheel_bk_r = amt.edit_bones.get('DEF-Wheel_BR_0')
+            wheel_bk_l = amt.edit_bones.get('DEF-Wheel_BL_0')
 
             axisBk = amt.edit_bones.new('MCH-Axis.Bk')
             axisBk.head = wheel_bk_r.head
@@ -728,9 +757,9 @@ class ArmatureGenerator(object):
         mch_wheel_rotation.tail.y += mch_wheel_rotation.tail.z
         mch_wheel_rotation.use_deform = False
 
-        def_wheel_brake_bone = amt.edit_bones.get(name_suffix.name('DEF-WheelBrake'))
+        def_wheel_brake_bone = amt.edit_bones.get(name_suffix.name('DEF-Brake'))
         if def_wheel_brake_bone is not None:
-            mch_wheel = amt.edit_bones.new(name_suffix.name('MCH-WheelBrake'))
+            mch_wheel = amt.edit_bones.new(name_suffix.name('MCH-Brake'))
             mch_wheel.head = def_wheel_brake_bone.head
             mch_wheel.tail = def_wheel_brake_bone.tail
             mch_wheel.tail.y += .5
@@ -746,7 +775,7 @@ class ArmatureGenerator(object):
         wheel.tail.y += wheel.tail.z * .9
 
         if name_suffix.is_left and name_suffix.is_first:
-            wheel_brake = amt.edit_bones.new(name_suffix.name('WheelBrake'))
+            wheel_brake = amt.edit_bones.new(name_suffix.name('Brake'))
             create_wheel_brake_bone(wheel_brake, mch_wheel, wheel)
 
     def generate_wheel_damper(self, wheel_dimension, parent_bone):
@@ -1010,22 +1039,34 @@ class ArmatureGenerator(object):
 
         mch_axis = pose.bones.get('MCH-Axis.%s' % position)
         if mch_axis is not None:
-            cns = mch_axis.constraints.new('COPY_LOCATION')
-            cns.name = 'Copy location from right wheel'
-            cns.target = self.ob
-            cns.subtarget = 'MCH-WheelDamper.%s.R' % position
-            cns.use_x = True
-            cns.use_y = True
-            cns.use_z = True
-            cns.owner_space = 'WORLD'
-            cns.target_space = 'WORLD'
+            # Find the right and left wheel dimensions for this position
+            right_wheel = None
+            left_wheel = None
+            for wheel_dim in self.dimension.wheels_dimensions:
+                if wheel_dim.position == position:
+                    if wheel_dim.side_position == 'R':
+                        right_wheel = wheel_dim
+                    elif wheel_dim.side_position == 'L':
+                        left_wheel = wheel_dim
+            
+            if right_wheel:
+                cns = mch_axis.constraints.new('COPY_LOCATION')
+                cns.name = 'Copy location from right wheel'
+                cns.target = self.ob
+                cns.subtarget = right_wheel.name('MCH-WheelDamper')
+                cns.use_x = True
+                cns.use_y = True
+                cns.use_z = True
+                cns.owner_space = 'WORLD'
+                cns.target_space = 'WORLD'
 
-            mch_axis = pose.bones['MCH-Axis.%s' % position]
-            cns = mch_axis.constraints.new('DAMPED_TRACK')
-            cns.name = 'Track Left Wheel'
-            cns.target = self.ob
-            cns.subtarget = 'MCH-WheelDamper.%s.L' % position
-            cns.track_axis = 'TRACK_Y'
+            if left_wheel:
+                mch_axis = pose.bones['MCH-Axis.%s' % position]
+                cns = mch_axis.constraints.new('DAMPED_TRACK')
+                cns.name = 'Track Left Wheel'
+                cns.target = self.ob
+                cns.subtarget = left_wheel.name('MCH-WheelDamper')
+                cns.track_axis = 'TRACK_Y'
 
     def generate_constraints_on_wheel_bones(self, name_suffix):
         pose = self.ob.pose
@@ -1038,11 +1079,11 @@ class ArmatureGenerator(object):
         cns.target = self.ob
         cns.subtarget = name_suffix.name('MCH-Wheel')
 
-        def_wheel_brake = pose.bones.get(name_suffix.name('DEF-WheelBrake'))
+        def_wheel_brake = pose.bones.get(name_suffix.name('DEF-Brake'))
         if def_wheel_brake is not None:
             cns = def_wheel_brake.constraints.new('COPY_TRANSFORMS')
             cns.target = self.ob
-            cns.subtarget = name_suffix.name('MCH-WheelBrake')
+            cns.subtarget = name_suffix.name('MCH-Brake')
 
         ground_sensor = pose.bones[name_suffix.name('GroundSensor')]
         ground_sensor.lock_location = (True, True, False)
@@ -1091,7 +1132,7 @@ class ArmatureGenerator(object):
         wheel.custom_shape = get_widget('WGT-CarRig.Wheel')
         wheel.bone.show_wire = True
 
-        wheel_brake = pose.bones.get(name_suffix.name('WheelBrake'))
+        wheel_brake = pose.bones.get(name_suffix.name('Brake'))
         if wheel_brake:
             generate_constraint_on_wheel_brake_bone(wheel_brake, wheel)
 
@@ -1175,13 +1216,20 @@ class ArmatureGenerator(object):
     def generate_bone_groups(self):
         pose = self.ob.pose
         create_bone_group(pose, 'Direction', color_set='THEME04', bone_names=('Root', 'Drift', 'SHP-Root', 'SHP-Drift'))
-        create_bone_group(pose, 'Suspension', color_set='THEME09', bone_names=(
-            'Suspension', 'WheelDamper.Ft.L', 'WheelDamper.Ft.R', 'WheelDamper.Bk.L', 'WheelDamper.Bk.R'))
+        
+        # Generate WheelDamper bone names dynamically based on new naming convention
+        wheel_damper_names = ['Suspension']
+        for wheel_dimension in self.dimension.wheels_dimensions:
+            wheel_damper_name = wheel_dimension.name('WheelDamper')
+            if wheel_damper_name:
+                wheel_damper_names.append(wheel_damper_name)
+        
+        create_bone_group(pose, 'Suspension', color_set='THEME09', bone_names=tuple(wheel_damper_names))
 
         wheel_widgets = ('Steering',)
         for wheel_dimension in self.dimension.wheels_dimensions:
             wheel_widgets += tuple(wheel_dimension.names('Wheel'))
-            wheel_widgets += tuple(wheel_dimension.names('WheelBrake'))
+            wheel_widgets += tuple(wheel_dimension.names('Brake'))
         create_bone_group(pose, 'Wheel', color_set='THEME03', bone_names=wheel_widgets)
 
         ground_sensor_names = (
@@ -1280,28 +1328,28 @@ class OBJECT_OT_armatureCarDeformationRig(bpy.types.Operator):
     def invoke(self, context, event):
         self.bones_position = {
             'Body': mathutils.Vector((0.0, 0, .8)),
-            'Wheel.Ft.L': mathutils.Vector((0.9, -2, .5)),
-            'Wheel.Ft.R': mathutils.Vector((-.9, -2, .5)),
-            'Wheel.Bk.L': mathutils.Vector((0.9, 2, .5)),
-            'Wheel.Bk.R': mathutils.Vector((-.9, 2, .5)),
-            'WheelBrake.Ft.L': mathutils.Vector((0.8, -2, .5)),
-            'WheelBrake.Ft.R': mathutils.Vector((-.8, -2, .5)),
-            'WheelBrake.Bk.L': mathutils.Vector((0.8, 2, .5)),
-            'WheelBrake.Bk.R': mathutils.Vector((-.8, 2, .5))
+            'Wheel_FL_0': mathutils.Vector((0.9, -2, .5)),
+            'Wheel_FR_0': mathutils.Vector((-.9, -2, .5)),
+            'Wheel_BL_0': mathutils.Vector((0.9, 2, .5)),
+            'Wheel_BR_0': mathutils.Vector((-.9, 2, .5)),
+            'Brake_FL_0': mathutils.Vector((0.8, -2, .5)),
+            'Brake_FR_0': mathutils.Vector((-.8, -2, .5)),
+            'Brake_BL_0': mathutils.Vector((0.8, 2, .5)),
+            'Brake_BR_0': mathutils.Vector((-.8, 2, .5))
         }
         self.target_objects_name = {}
 
         has_body_target = self._find_target_object(context, 'Body')
 
-        nb_wheels_ft_l = self._find_target_object_for_wheels(context, 'Wheel.Ft.L')
-        nb_wheels_ft_r = self._find_target_object_for_wheels(context, 'Wheel.Ft.R')
-        nb_wheels_bk_l = self._find_target_object_for_wheels(context, 'Wheel.Bk.L')
-        nb_wheels_bk_r = self._find_target_object_for_wheels(context, 'Wheel.Bk.R')
+        nb_wheels_ft_l = self._find_target_object_for_wheels(context, 'Wheel_FL_0')
+        nb_wheels_ft_r = self._find_target_object_for_wheels(context, 'Wheel_FR_0')
+        nb_wheels_bk_l = self._find_target_object_for_wheels(context, 'Wheel_BL_0')
+        nb_wheels_bk_r = self._find_target_object_for_wheels(context, 'Wheel_BR_0')
 
-        nb_wheel_brakes_ft_l = self._find_target_object_for_wheels(context, 'WheelBrake.Ft.L')
-        nb_wheel_brakes_ft_r = self._find_target_object_for_wheels(context, 'WheelBrake.Ft.R')
-        nb_wheel_brakes_bk_l = self._find_target_object_for_wheels(context, 'WheelBrake.Bk.L')
-        nb_wheel_brakes_bk_r = self._find_target_object_for_wheels(context, 'WheelBrake.Bk.R')
+        nb_wheel_brakes_ft_l = self._find_target_object_for_wheels(context, 'Brake_FL_0')
+        nb_wheel_brakes_ft_r = self._find_target_object_for_wheels(context, 'Brake_FR_0')
+        nb_wheel_brakes_bk_l = self._find_target_object_for_wheels(context, 'Brake_BL_0')
+        nb_wheel_brakes_bk_r = self._find_target_object_for_wheels(context, 'Brake_BR_0')
 
         self.nb_front_wheels_pairs = max(nb_wheels_ft_l, nb_wheels_ft_r)
         self.nb_back_wheels_pairs = max(nb_wheels_bk_l, nb_wheels_bk_r)
@@ -1349,22 +1397,22 @@ class OBJECT_OT_armatureCarDeformationRig(bpy.types.Operator):
 
         self._create_bone(rig, 'Body', delta_pos=self.body_pos_delta)
 
-        self._create_wheel_bones(rig, 'Wheel.Ft.L', self.nb_front_wheels_pairs, self.front_wheel_pos_delta)
-        self._create_wheel_bones(rig, 'Wheel.Ft.R', self.nb_front_wheels_pairs,
+        self._create_wheel_bones(rig, 'Wheel_FL_0', self.nb_front_wheels_pairs, self.front_wheel_pos_delta)
+        self._create_wheel_bones(rig, 'Wheel_FR_0', self.nb_front_wheels_pairs,
                                  self.front_wheel_pos_delta.reflect(mathutils.Vector((1, 0, 0))))
-        self._create_wheel_bones(rig, 'Wheel.Bk.L', self.nb_back_wheels_pairs, self.back_wheel_pos_delta)
-        self._create_wheel_bones(rig, 'Wheel.Bk.R', self.nb_back_wheels_pairs,
+        self._create_wheel_bones(rig, 'Wheel_BL_0', self.nb_back_wheels_pairs, self.back_wheel_pos_delta)
+        self._create_wheel_bones(rig, 'Wheel_BR_0', self.nb_back_wheels_pairs,
                                  self.back_wheel_pos_delta.reflect(mathutils.Vector((1, 0, 0))))
 
         front_wheel_brakes_delta_pos = self.front_wheel_pos_delta.copy()
         front_wheel_brakes_delta_pos.x = self.front_wheel_brakes_pos_delta
-        self._create_wheel_bones(rig, 'WheelBrake.Ft.L', self.nb_front_wheel_brakes_pairs, front_wheel_brakes_delta_pos)
-        self._create_wheel_bones(rig, 'WheelBrake.Ft.R', self.nb_front_wheel_brakes_pairs,
+        self._create_wheel_bones(rig, 'Brake_FL_0', self.nb_front_wheel_brakes_pairs, front_wheel_brakes_delta_pos)
+        self._create_wheel_bones(rig, 'Brake_FR_0', self.nb_front_wheel_brakes_pairs,
                                  front_wheel_brakes_delta_pos.reflect(mathutils.Vector((1, 0, 0))))
         back_wheel_brakes_delta_pos = self.back_wheel_pos_delta.copy()
         back_wheel_brakes_delta_pos.x = self.back_wheel_brakes_pos_delta
-        self._create_wheel_bones(rig, 'WheelBrake.Bk.L', self.nb_back_wheel_brakes_pairs, back_wheel_brakes_delta_pos)
-        self._create_wheel_bones(rig, 'WheelBrake.Bk.R', self.nb_back_wheel_brakes_pairs,
+        self._create_wheel_bones(rig, 'Brake_BL_0', self.nb_back_wheel_brakes_pairs, back_wheel_brakes_delta_pos)
+        self._create_wheel_bones(rig, 'Brake_BR_0', self.nb_back_wheel_brakes_pairs,
                                  back_wheel_brakes_delta_pos.reflect(mathutils.Vector((1, 0, 0))))
 
         deselect_edit_bones(rig)
@@ -1450,19 +1498,21 @@ class POSE_OT_carAnimationAddBrakeWheelBones(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.object.mode == 'POSE' and \
-            context.object is not None and context.object.data is not None and \
+        return context.object is not None and context.object.mode == 'POSE' and \
+            context.object.data is not None and \
             context.object.data.get('Car Rig')
 
     def execute(self, context):
         mode = context.object.mode
-        re_wheel_bone_name = re.compile(r'^Wheel\.(Ft|Bk)\.([LR])(\.\d+)?$')
+        # Match new naming: Wheel_FR_0, Wheel_FL_1, Wheel_BR_2, etc.
+        re_wheel_bone_name = re.compile(r'^Wheel_([FB])([LR])_(\d+)$')
         for pose_bone in context.selected_pose_bones:
             matcher = re_wheel_bone_name.match(pose_bone.name)
             if matcher:
-                wheelbrake_name = 'WheelBrake.%s.%s%s' % matcher.groups(default='')
-                parent_name = 'MCH-Wheel.%s.%s%s' % matcher.groups(default='')
-                self.create_wheelbrake_bone(context, pose_bone, wheelbrake_name, parent_name)
+                pos, side, idx = matcher.groups()
+                brake_name = f'Brake_{pos}{side}_{idx}'
+                parent_name = f'MCH-Wheel_{pos}{side}_{idx}'
+                self.create_wheelbrake_bone(context, pose_bone, brake_name, parent_name)
         bpy.ops.object.mode_set(mode=mode)
         return {"FINISHED"}
 
