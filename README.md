@@ -4,6 +4,8 @@
 
 _This fork supports **Blender 4.0+** and consolidates fixes from the community while the maintainer is absent._
 
+This fork also serves as the rigacar to be compatible with traffiq addon. for the Engon/Traffiq addon, please refer to this link: https://github.com/polygoniq/engon
+
 Upstream readme description below.
 
 ## Upstream
