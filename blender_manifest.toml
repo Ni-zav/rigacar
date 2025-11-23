@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "rigacar"
-version = "8.1.0"
+version = "8.2.0"
 name = "Rigacar (Generates Car Rig)"
 tagline = "Car rig generator with animation baking tools"
 maintainer = "David Gayerie"
@@ -10,7 +10,7 @@ doc_url = "http://digicreatures.net/articles/rigacar.html"
 tracker_url = "https://github.com/digicreatures/rigacar/issues"
 category = ["Rigging"]
 blender_version_min = "4.2.0"
-blender_version_max = "4.2.99"
+blender_version_max = "5.1.0"
 license = ["GPL"]
 
 [build]

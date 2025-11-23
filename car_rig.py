@@ -72,7 +72,7 @@ def deselect_edit_bones(ob):
 def create_constraint_influence_driver(ob, cns, driver_data_path, base_influence=1.0):
     fcurve = cns.driver_add('influence')
     drv = fcurve.driver
-    drv.type = 'AVERAGE'
+    drv.type = 'SCRIPTED'
     var = drv.variables.new()
     var.name = 'influence'
     var.type = 'SINGLE_PROP'
@@ -82,11 +82,8 @@ def create_constraint_influence_driver(ob, cns, driver_data_path, base_influence
     targ.id = ob
     targ.data_path = driver_data_path
 
-    if base_influence != 1.0:
-        fmod = fcurve.modifiers[0]
-        fmod.mode = 'POLYNOMIAL'
-        fmod.poly_order = 1
-        fmod.coefficients = (0, base_influence)
+    # Use expression to multiply by base_influence
+    drv.expression = f'influence * {base_influence}'
 
 
 def create_rotation_euler_x_driver(ob, bone, driver_data_path):
