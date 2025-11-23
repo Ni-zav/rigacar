@@ -97,16 +97,37 @@ def clear_property_animation(context, property_name, remove_keyframes=True):
     if remove_keyframes and context.object.animation_data and context.object.animation_data.action:
         fcurve_datapath = '["%s"]' % property_name
         action = context.object.animation_data.action
-        fcurve = action.fcurves.find(fcurve_datapath)
-        if fcurve is not None:
-            action.fcurves.remove(fcurve)
+        # In Blender 5.0+, actions are layered. Try to find fcurve in layers
+        fcurve = None
+        if hasattr(action, 'layers'):
+            # Blender 5.0+ with layered actions
+            for layer in action.layers:
+                for strip in layer.strips:
+                    if hasattr(strip, 'fcurves'):
+                        fcurve = strip.fcurves.find(fcurve_datapath)
+                        if fcurve is not None:
+                            strip.fcurves.remove(fcurve)
+                            break
+                if fcurve is not None:
+                    break
+        elif hasattr(action, 'fcurves'):
+            # Older Blender versions with direct fcurves
+            fcurve = action.fcurves.find(fcurve_datapath)
+            if fcurve is not None:
+                action.fcurves.remove(fcurve)
     context.object[property_name] = .0
 
 
 def create_property_animation(context, property_name):
     action = context.object.animation_data.action
     fcurve_datapath = '["%s"]' % property_name
-    return action.fcurves.new(fcurve_datapath, index=0, action_group='Wheels rotation')
+    # In Blender 5.0+, use fcurve_ensure_for_datablock for layered actions
+    if hasattr(action, 'fcurve_ensure_for_datablock'):
+        # Blender 5.0+ with layered actions
+        return action.fcurve_ensure_for_datablock(context.object, fcurve_datapath, index=0, group_name='Wheels rotation')
+    else:
+        # Older Blender versions with direct fcurves
+        return action.fcurves.new(fcurve_datapath, index=0, action_group='Wheels rotation')
 
 
 class FCurvesEvaluator(object):
@@ -234,24 +255,40 @@ class BakingOperator(object):
         self.layout.prop(self, 'frame_end')
         self.layout.prop(self, 'keyframe_tolerance')
 
+    def _find_fcurve(self, action, fcurve_name, index=0):
+        """Find fcurve in action, handling Blender 5.0+ layered actions."""
+        # In Blender 5.0+, fcurves are in layers/strips, not directly on action
+        if hasattr(action, 'fcurves') and hasattr(action.fcurves, 'find'):
+            # Older Blender versions - direct access to fcurves
+            return action.fcurves.find(fcurve_name, index=index)
+        elif hasattr(action, 'layers'):
+            # Blender 5.0+ with layered actions
+            for layer in action.layers:
+                for strip in layer.strips:
+                    if hasattr(strip, 'fcurves'):
+                        fcurve = strip.fcurves.find(fcurve_name, index=index)
+                        if fcurve is not None:
+                            return fcurve
+        return None
+
     def _create_euler_evaluator(self, action, source_bone):
         fcurve_name = 'pose.bones["%s"].rotation_euler' % source_bone.name
-        fc_root_rot = [action.fcurves.find(fcurve_name, index=i) for i in range(3)]
+        fc_root_rot = [self._find_fcurve(action, fcurve_name, index=i) for i in range(3)]
         return EulerToQuaternionFCurvesEvaluator(FCurvesEvaluator(fc_root_rot, default_value=(.0, .0, .0)))
 
     def _create_quaternion_evaluator(self, action, source_bone):
         fcurve_name = 'pose.bones["%s"].rotation_quaternion' % source_bone.name
-        fc_root_rot = [action.fcurves.find(fcurve_name, index=i) for i in range(4)]
+        fc_root_rot = [self._find_fcurve(action, fcurve_name, index=i) for i in range(4)]
         return QuaternionFCurvesEvaluator(FCurvesEvaluator(fc_root_rot, default_value=(1.0, .0, .0, .0)))
 
     def _create_location_evaluator(self, action, source_bone):
         fcurve_name = 'pose.bones["%s"].location' % source_bone.name
-        fc_root_loc = [action.fcurves.find(fcurve_name, index=i) for i in range(3)]
+        fc_root_loc = [self._find_fcurve(action, fcurve_name, index=i) for i in range(3)]
         return VectorFCurvesEvaluator(FCurvesEvaluator(fc_root_loc, default_value=(.0, .0, .0)))
 
     def _create_scale_evaluator(self, action, source_bone):
         fcurve_name = 'pose.bones["%s"].scale' % source_bone.name
-        fc_root_loc = [action.fcurves.find(fcurve_name, index=i) for i in range(3)]
+        fc_root_loc = [self._find_fcurve(action, fcurve_name, index=i) for i in range(3)]
         return VectorFCurvesEvaluator(FCurvesEvaluator(fc_root_loc, default_value=(1.0, 1.0, 1.0)))
 
     def _bake_action(self, context, *source_bones):
@@ -260,18 +297,19 @@ class BakingOperator(object):
                                                                                  'use_tweak_mode') else False
 
         # saving context
-        selected_bones = [b for b in context.object.data.bones if b.select]
+        # In Blender 5.0+, work with pose bones for selection (PoseBone.select, not Bone.select)
+        selected_pose_bones = [b for b in context.object.pose.bones if b.select]
         mode = context.object.mode
         source_bones_matrix_basis = []
         
         try:
-            for b in selected_bones:
+            for b in selected_pose_bones:
                 b.select = False
 
             bpy.ops.object.mode_set(mode='OBJECT')
             for source_bone in source_bones:
                 source_bones_matrix_basis.append(context.object.pose.bones[source_bone.name].matrix_basis.copy())
-                source_bone.select = True
+                context.object.pose.bones[source_bone.name].select = True
 
             bake_options = serialize_bake_options()
             baked_action = bpy_extras.anim_utils.bake_action(
@@ -285,10 +323,10 @@ class BakingOperator(object):
         finally:
             # restoring context - guaranteed to run even on exception
             try:
-                for source_bone, matrix_basis in zip(source_bones, source_bones_matrix_basis):
-                    context.object.pose.bones[source_bone.name].matrix_basis = matrix_basis
-                    source_bone.select = False
-                for b in selected_bones:
+                for source_bone in source_bones:
+                    context.object.pose.bones[source_bone.name].matrix_basis = source_bones_matrix_basis[source_bones.index(source_bone)]
+                    context.object.pose.bones[source_bone.name].select = False
+                for b in selected_pose_bones:
                     b.select = True
 
                 bpy.ops.object.mode_set(mode=mode)
