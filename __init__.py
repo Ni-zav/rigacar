@@ -25,6 +25,10 @@ from . import car_rig
 from . import widgets
 from . import mesh_grouper
 
+# Module storage for late-loaded modules
+_modules = {
+}
+
 # Handle reload on script re-execution
 if "bpy" in locals():
     importlib.reload(bake_operators)
@@ -34,17 +38,17 @@ if "bpy" in locals():
 
 
 def enumerate_ground_sensors(bones):
-    bone = bones.get('GroundSensor.Axle.Ft')
+    bone = bones.get('GroundSensor_Axle_F')
     if bone is not None:
         yield bone
         for bone in bones:
-            if bone.name.startswith('GroundSensor.Ft'):
+            if bone.name.startswith('GroundSensor_F'):
                 yield bone
-    bone = bones.get('GroundSensor.Axle.Bk')
+    bone = bones.get('GroundSensor_Axle_B')
     if bone is not None:
         yield bone
         for bone in bones:
-            if bone.name.startswith('GroundSensor.Bk'):
+            if bone.name.startswith('GroundSensor_B'):
                 yield bone
 
 
@@ -72,9 +76,21 @@ class RIGACAR_PT_mixin:
 
     def display_rig_props_section(self, context):
         layout = self.layout.column()
-        layout.prop(context.object, '["wheels_on_y_axis"]', text="Wheels on Y axis")
-        layout.prop(context.object, '["suspension_factor"]', text="Pitch factor")
-        layout.prop(context.object, '["suspension_rolling_factor"]', text="Roll factor")
+        layout.prop(context.object, '["tq_WheelsYRolling"]', text="Wheels on Y axis")
+        layout.prop(context.object, '["tq_SuspensionFactor"]', text="Pitch factor")
+        layout.prop(context.object, '["tq_SuspensionRollingFactor"]', text="Roll factor")
+        layout.separator()
+        layout.label(text="Animation Setup:", icon='ANIM')
+        layout.prop(context.scene, 'tq_ground_object', text="Ground Object")
+        layout.prop(context.scene, 'tq_target_path_object', text="Path Curve")
+        layout.separator()
+        layout.operator(car_rig.POSE_OT_carFollowPath.bl_idname, text="Setup Follow Path Animation", icon='CURVE_PATH')
+        layout.operator(car_rig.POSE_OT_carClearFollowPathAnimation.bl_idname, text="Clear Follow Path Animation", icon='TRASH')
+        if context.mode == 'POSE':
+            layout.separator()
+            layout.label(text="Manual Setup:", icon='SETTINGS')
+            layout.operator(car_rig.POSE_OT_carSetGround.bl_idname, text="Set Ground Only")
+            layout.operator(car_rig.POSE_OT_carFollowPath.bl_idname, text="Follow Path Settings")
 
     def display_ground_sensors_section(self, context):
         for ground_sensor in enumerate_ground_sensors(context.object.pose.bones):
@@ -158,7 +174,10 @@ class RIGACAR_PT_wheelsAnimationView(bpy.types.Panel, RIGACAR_PT_mixin):
         return RIGACAR_PT_mixin.is_car_rig_generated(context)
 
     def draw(self, context):
-        self.display_bake_section(context)
+        # Wheel animation UI cleared - baking/clearing is now handled
+        # directly when running the "Setup Follow Path Animation" operator.
+        # Intentionally left blank to remove manual bake buttons.
+        return
 
 
 class RIGACAR_PT_groundSensorsView(bpy.types.Panel, RIGACAR_PT_mixin):
@@ -191,6 +210,18 @@ classes = (
 
 
 def register():
+    try:
+        bpy.types.VIEW3D_MT_armature_add.remove(menu_entries)
+    except:
+        pass
+    
+    # Unregister any already-registered classes (for reload support)
+    for c in classes:
+        try:
+            bpy.utils.unregister_class(c)
+        except:
+            pass
+    
     bpy.types.VIEW3D_MT_armature_add.append(menu_entries)
     for c in classes:
         bpy.utils.register_class(c)

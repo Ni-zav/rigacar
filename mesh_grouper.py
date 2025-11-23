@@ -37,6 +37,12 @@ RIG_GROUPS = {
     'WheelBrake Back Left Extra': 'Brake_BL_1',
     'WheelBrake Back Right Extra': 'Brake_BR_1',
     'Steering': 'Steering',
+    'Door Front Left': 'Door_FL_0',
+    'Door Front Right': 'Door_FR_0',
+    'Door Back Left': 'Door_BL_0',
+    'Door Back Right': 'Door_BR_0',
+    'Trunk Front': 'Trunk_F_0',
+    'Trunk Back': 'Trunk_B_0',
 }
 
 
@@ -224,6 +230,23 @@ class MESH_GROUPER_PT_mesh_grouping(bpy.types.Panel):
             # Steering button
             row = box.row()
             row.operator("mesh_grouper.group_steering", text="Steering")
+            
+            # Door buttons
+            box.separator()
+            box.label(text="Doors:", icon='OUTLINER_DATA_ARMATURE')
+            row = box.row()
+            row.operator("mesh_grouper.group_door_fl_0", text="Door FL")
+            row.operator("mesh_grouper.group_door_fr_0", text="Door FR")
+            row = box.row()
+            row.operator("mesh_grouper.group_door_bl_0", text="Door BL")
+            row.operator("mesh_grouper.group_door_br_0", text="Door BR")
+            
+            # Trunk buttons
+            box.separator()
+            box.label(text="Trunks:", icon='OUTLINER_DATA_ARMATURE')
+            row = box.row()
+            row.operator("mesh_grouper.group_trunk_f_0", text="Trunk Front")
+            row.operator("mesh_grouper.group_trunk_b_0", text="Trunk Back")
         else:
             box = layout.box()
             box.label(text="Select meshes to assign to rig groups", icon='INFO')

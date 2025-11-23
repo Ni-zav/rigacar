@@ -1,0 +1,1 @@
+trunk is inside body, with trunk_B_0 or trunk_F_0 for front or back, and 0 is the index of the trunk segment (0,1,2,3...).  

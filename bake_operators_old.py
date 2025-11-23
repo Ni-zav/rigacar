@@ -214,13 +214,8 @@ class BakingOperator(object):
                 self.report({'ERROR'}, "Failed to create or access animation action")
                 return {'CANCELLED'}
             
-            # Check if frame range was stored by follow path operator
-            if context.scene.get('tq_follow_path_frame_start') and context.scene.get('tq_follow_path_frame_end'):
-                self.frame_start = context.scene.tq_follow_path_frame_start
-                self.frame_end = context.scene.tq_follow_path_frame_end
-            else:
-                self.frame_start = int(action.frame_range[0])
-                self.frame_end = int(action.frame_range[1])
+            self.frame_start = int(action.frame_range[0])
+            self.frame_end = int(action.frame_range[1])
 
             return context.window_manager.invoke_props_dialog(self)
         except Exception as e:
@@ -310,13 +305,6 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
     def execute(self, context):
         context.object['tq_WheelsYRolling'] = False
         self._bake_wheels_rotation(context)
-        
-        # Clear frame range flags if they exist
-        if context.scene.get('tq_follow_path_frame_start'):
-            del context.scene['tq_follow_path_frame_start']
-        if context.scene.get('tq_follow_path_frame_end'):
-            del context.scene['tq_follow_path_frame_end']
-        
         return {'FINISHED'}
 
     @cursor('WAIT')
@@ -349,9 +337,6 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
 
         self.report({'INFO'}, f"Found {len(wheel_bones)} wheel bones to bake")
 
-        # Get the original action BEFORE baking (with Root movement data from Follow Path)
-        original_action = context.object.animation_data.action
-
         # CRITICAL: Bake the Wheel control bones (they have animation from rig constraints)
         baked_action = self._bake_action(context, *wheel_bones)
 
@@ -361,127 +346,65 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
 
         try:
             for wheel_bone, brake_bone in zip(wheel_bones, brake_bones):
-                self._bake_wheel_rotation(context, baked_action, wheel_bone, brake_bone, original_action)
+                self._bake_wheel_rotation(context, baked_action, wheel_bone, brake_bone)
         finally:
             bpy.data.actions.remove(baked_action)
 
-    def _evaluate_distance_per_frame(self, baked_action, bone, brake_bone, original_action=None):
+    def _evaluate_distance_per_frame(self, action, bone, brake_bone):
         """Evaluate wheel rotation distance for each frame.
         
         Returns (frame, cumulative_distance) tuples where distance is in radians.
         Uses tolerance to drop redundant keyframes (based on distance change, not speed).
         2π radians (6.28) = 1 full wheel rotation, π (3.14) = half rotation.
         """
-        # Use the ORIGINAL action (with Root movement data) for distance calculation
-        # The baked_action has no Root location data, so we need the original Follow Path action
-        action_for_distance = original_action if original_action is not None else baked_action
-        
-        # Find Root bone with animated location in the original action
+        # Use Root bone's animated location (it moves with the car body during animation)
+        # Root location directly represents how far the car has traveled
         reference_bone_name = 'Root'
-        has_root_location = any(
-            f'pose.bones["{reference_bone_name}"].location' in fcurve.data_path 
-            for fcurve in action_for_distance.fcurves
-        )
         
-        if not has_root_location:
-            # Root has no animated location - search for ANY bone with location animation
-            # This finds bones that actually moved during Follow Path
-            location_fcurves = [
-                fcurve.data_path for fcurve in action_for_distance.fcurves
-                if '.location' in fcurve.data_path
-            ]
-            
-            if location_fcurves:
-                # Extract bone name from first location fcurve (format: pose.bones["BoneName"].location)
-                import re as regex_module
-                match = regex_module.search(r'pose\.bones\["([^"]+)"\]\.location', location_fcurves[0])
-                if match:
-                    reference_bone_name = match.group(1)
-            else:
-                # No bones have location animation - this is a problem!
-                # Fall back to wheel bone (won't work, but won't crash)
-                reference_bone_name = bone.name
+        # Create a dummy bone object with Root's name for the location evaluator
+        class DummyBone:
+            def __init__(self, name):
+                self.name = name
         
-        # We'll sample evaluated world-space positions per frame. This works even if
-        # the motion is produced by constraints/drivers (no fcurves present).
-        scene = bpy.context.scene
-        arm_obj = bpy.context.object
-
-        # Decide whether reference is a pose bone or the armature object
-        reference_is_bone = reference_bone_name in arm_obj.pose.bones
-        
-        # Prepare brake evaluator from baked wheel bone action
-        brake_evaluator = self._create_scale_evaluator(baked_action, brake_bone)
+        reference_bone = DummyBone(reference_bone_name)
+        reference_loc_evaluator = self._create_location_evaluator(action, reference_bone)
+        rot_evaluator = self._create_euler_evaluator(action, bone)
+        brake_evaluator = self._create_scale_evaluator(action, brake_bone)
 
         # Use wheel bone's length as the effective radius for rotation calculation
         radius = bone.length if bone.length > .0 else 1.0
-        
-        # Get the wheel bone's local Y-axis direction (pointing from tail to head)
-        # This represents the wheel's rolling axis in local space
         bone_init_vector = (bone.head_local - bone.tail_local).normalized()
-
-        # Ensure scene is at start frame and get initial world position
-        scene.frame_set(self.frame_start)
-        try:
-            bpy.context.view_layer.update()
-        except Exception:
-            pass
-
-        if reference_is_bone:
-            prev_pos = arm_obj.matrix_world @ arm_obj.pose.bones[reference_bone_name].head
-        else:
-            prev_pos = arm_obj.matrix_world.translation
-
+        
+        prev_pos = reference_loc_evaluator.evaluate(self.frame_start)
         prev_speed = 0.0
         cumulative_distance = 0.0
         last_keyframe_distance = 0.0  # Track distance at last keyframe
-
+        
         # Always yield frame 1 with distance=0 (starting point)
         yield self.frame_start, cumulative_distance
-
-        # Process each frame by sampling evaluated transforms
+        
+        # Process each frame
         for f in range(self.frame_start + 1, self.frame_end + 1):
-            scene.frame_set(f)
-            try:
-                bpy.context.view_layer.update()
-            except Exception:
-                pass
-
-            if reference_is_bone:
-                pos = arm_obj.matrix_world @ arm_obj.pose.bones[reference_bone_name].head
-            else:
-                pos = arm_obj.matrix_world.translation
-
-            # Calculate speed from motion vector (distance between frames)
+            pos = reference_loc_evaluator.evaluate(f)
+            # Calculate speed from motion vector
             speed_vector = pos - prev_pos
             # Apply brake influence: brakes reduce forward motion
             brake_scale = 2 * brake_evaluator.evaluate(f).y - 1
             speed_vector *= brake_scale
+            
+            # Get rotation quaternion to determine bone orientation
+            rotation_quaternion = rot_evaluator.evaluate(f)
+            bone_orientation = rotation_quaternion @ bone_init_vector
+            
+            # Calculate signed speed (positive = forward, negative = backward)
+            speed = math.copysign(speed_vector.magnitude, bone_orientation.dot(speed_vector))
 
-            # Get the actual evaluated world-space orientation of the reference bone
-            # This correctly handles Follow Path constraint rotation (which has no fcurves)
-            if reference_is_bone:
-                reference_pose_bone = arm_obj.pose.bones[reference_bone_name]
-                # Get world-space rotation matrix of the reference bone
-                world_matrix = arm_obj.matrix_world @ reference_pose_bone.matrix
-                bone_orientation = world_matrix.to_quaternion() @ bone_init_vector
-            else:
-                # Use wheel bone rotation from baked action as fallback
-                rotation_quaternion = self._create_euler_evaluator(baked_action, bone).evaluate(f)
-                bone_orientation = rotation_quaternion @ bone_init_vector
+            # Convert linear distance to rotation in radians
+            # radians = distance / radius (since distance = radius * angle)
+            rotation_speed = speed / radius
 
-            # Calculate signed distance (positive = forward, negative = backward)
-            distance = speed_vector.length
-            signed_distance = math.copysign(distance, bone_orientation.dot(speed_vector))
-
-            # Convert linear distance to rotation in radians: angle = distance / radius
-            # We want accumulated rotation to be positive-valued, so take absolute
-            # of the signed rotation. This prevents the output property from going
-            # negative when the sampling direction yields negative values.
-            rotation_signed = signed_distance / radius
-            rotation_speed = abs(rotation_signed) / 2
-
-            # Accumulate rotation (total rotation in radians so far) — always positive
+            # Accumulate rotation (total rotation in radians so far)
+            # rotation_speed is already signed (direction kept by `speed`), so use it
             cumulative_distance += rotation_speed
             
             # Decide whether to create a keyframe based on distance change OR speed transition
@@ -493,10 +416,10 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
             if f == self.frame_end:
                 # Always create keyframe at the final frame
                 should_create_keyframe = True
-            elif rotation_speed == 0.0 and prev_speed != 0.0:
+            elif speed == 0.0 and prev_speed != 0.0:
                 # Stopping: transition from motion to no motion
                 should_create_keyframe = True
-            elif rotation_speed != 0.0 and prev_speed == 0.0:
+            elif speed != 0.0 and prev_speed == 0.0:
                 # Starting: transition from no motion to motion
                 should_create_keyframe = True
             elif distance_since_last_keyframe >= self.keyframe_tolerance:
@@ -515,7 +438,7 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
             
             prev_pos = pos
 
-    def _bake_wheel_rotation(self, context, baked_action, bone, brake_bone, original_action=None):
+    def _bake_wheel_rotation(self, context, baked_action, bone, brake_bone):
         # Convert bone name from 'Wheel_FR_0' to 'tq_WheelRotation_FR_0'
         bone_name = bone.name.replace('Wheel_', 'tq_WheelRotation_')
         clear_property_animation(context, bone_name, remove_keyframes=False)
@@ -525,17 +448,8 @@ class ANIM_OT_carWheelsRotationBake(bpy.types.Operator, BakingOperator):
         pb: bpy.types.PoseBone = context.object.pose.bones[bone.name]
         pb.matrix_basis.identity()
 
-        # Diagnostic: check what action data we have
-        if original_action:
-            location_bones = [
-                fcurve.data_path for fcurve in original_action.fcurves
-                if '.location' in fcurve.data_path
-            ]
-            if not location_bones:
-                self.report({'WARNING'}, f"original_action has no bone location data. Check Follow Path animation.")
-
         # Collect all distance values from the evaluator
-        distance_per_frame = list(self._evaluate_distance_per_frame(baked_action, bone, brake_bone, original_action))
+        distance_per_frame = list(self._evaluate_distance_per_frame(baked_action, bone, brake_bone))
         
         if not distance_per_frame:
             self.report({'WARNING'}, f"No distance data calculated for {bone_name}")
@@ -589,12 +503,6 @@ class ANIM_OT_carSteeringBake(bpy.types.Operator, BakingOperator):
         if context.scene.get('tq_follow_path_bake_wheels', False):
             context.scene.tq_follow_path_bake_wheels = False  # Reset flag
             return bpy.ops.anim.car_wheels_rotation_bake('INVOKE_DEFAULT')
-        
-        # Clear frame range flags if they exist
-        if context.scene.get('tq_follow_path_frame_start'):
-            del context.scene['tq_follow_path_frame_start']
-        if context.scene.get('tq_follow_path_frame_end'):
-            del context.scene['tq_follow_path_frame_end']
         
         return {'FINISHED'}
 

@@ -468,6 +468,37 @@ def get_widgets():
                   (102, 103), (103, 105), (105, 104)]
     }
 
+    widgets['DoorTrunk'] = {
+        'vertices': [
+            # Circle with 16 segments for smooth appearance
+            (0.0, 0.5, 0.0),    # Top
+            (0.3536, 0.3536, 0.0),  # Top-right
+            (0.5, 0.0, 0.0),    # Right
+            (0.3536, -0.3536, 0.0), # Bottom-right
+            (0.0, -0.5, 0.0),   # Bottom
+            (-0.3536, -0.3536, 0.0), # Bottom-left
+            (-0.5, 0.0, 0.0),   # Left
+            (-0.3536, 0.3536, 0.0),  # Top-left
+            # Inner circle for thickness (slightly smaller)
+            (0.0, 0.4, 0.0),    # Top inner
+            (0.2828, 0.2828, 0.0),  # Top-right inner
+            (0.4, 0.0, 0.0),    # Right inner
+            (0.2828, -0.2828, 0.0), # Bottom-right inner
+            (0.0, -0.4, 0.0),   # Bottom inner
+            (-0.2828, -0.2828, 0.0), # Bottom-left inner
+            (-0.4, 0.0, 0.0),   # Left inner
+            (-0.2828, 0.2828, 0.0),  # Top-left inner
+        ],
+        'edges': [
+            # Outer circle
+            (0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 0),
+            # Inner circle
+            (8, 9), (9, 10), (10, 11), (11, 12), (12, 13), (13, 14), (14, 15), (15, 8),
+            # Radial spokes for better visibility
+            (0, 8), (2, 10), (4, 12), (6, 14)
+        ]
+    }
+
     return widgets
 
 
