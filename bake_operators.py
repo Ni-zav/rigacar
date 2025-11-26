@@ -664,22 +664,110 @@ class ANIM_OT_carSteeringBake(bpy.types.Operator, BakingOperator):
             bpy.data.actions.remove(baked_action)
 
 
+class ANIM_OT_carDriftBake(bpy.types.Operator, BakingOperator):
+    bl_idname = 'anim.car_drift_bake'
+    bl_label = 'Bake car drift'
+    bl_description = 'Automatically generates drift animation based on Root bone animation.'
+    bl_options = {'REGISTER', 'UNDO'}
+
+    drift_factor: bpy.props.FloatProperty(name='Drift factor', min=.1, default=1.0, description='Multiplier for drift rotation intensity')
+
+    def draw(self, context):
+        self.layout.use_property_split = True
+        self.layout.use_property_decorate = False
+        self.layout.prop(self, 'frame_start')
+        self.layout.prop(self, 'frame_end')
+        self.layout.prop(self, 'drift_factor')
+        self.layout.prop(self, 'keyframe_tolerance')
+
+    def execute(self, context):
+        if self.frame_end > self.frame_start and 'Drift' in context.object.data.bones:
+            self._bake_drift_rotation(context)
+        
+        # Check if we should chain to wheel rotation baking
+        if context.scene.get('tq_follow_path_bake_wheels', False):
+            context.scene.tq_follow_path_bake_wheels = False  # Reset flag
+            return bpy.ops.anim.car_wheels_rotation_bake('INVOKE_DEFAULT')
+        
+        # Clear frame range flags if they exist
+        if context.scene.get('tq_follow_path_frame_start'):
+            del context.scene['tq_follow_path_frame_start']
+        if context.scene.get('tq_follow_path_frame_end'):
+            del context.scene['tq_follow_path_frame_end']
+        
+        return {'FINISHED'}
+
+    def _evaluate_drift_per_frame(self, action, drift_bone):
+        loc_evaluator = self._create_location_evaluator(action, drift_bone)
+        rot_evaluator = self._create_quaternion_evaluator(action, drift_bone)
+
+        distance_threshold = 0.01  # Minimum movement to consider
+        drift_threshold = 0.01 * self.drift_factor
+
+        current_pos = loc_evaluator.evaluate(self.frame_start)
+        previous_pos = current_pos
+        previous_drift_angle = 0.0
+        
+        for f in range(self.frame_start, self.frame_end - 1):
+            next_pos = loc_evaluator.evaluate(f + 1)
+            movement_vector = next_pos - current_pos
+
+            if movement_vector.length_squared < distance_threshold:
+                continue
+
+            # Calculate direction change (turn rate)
+            if f > self.frame_start:
+                prev_movement = current_pos - previous_pos
+                if prev_movement.length_squared > distance_threshold:
+                    # Calculate the angle between previous movement and current movement
+                    prev_dir = prev_movement.normalized()
+                    curr_dir = movement_vector.normalized()
+                    turn_angle = prev_dir.angle(curr_dir)
+                    
+                    # Determine turn direction (cross product)
+                    cross = prev_dir.cross(curr_dir)
+                    turn_direction = 1 if cross.z > 0 else -1
+                    
+                    # Drift angle accumulates based on turn rate
+                    drift_angle = previous_drift_angle + turn_angle * self.drift_factor * turn_direction
+                    
+                    # Apply some damping to prevent extreme drift
+                    drift_angle *= 0.9
+                    
+                    if abs(drift_angle - previous_drift_angle) < drift_threshold:
+                        continue
+
+                    yield f, drift_angle
+                    previous_drift_angle = drift_angle
+
+            previous_pos = current_pos
+            current_pos = next_pos
+
+    @cursor('WAIT')
+    def _bake_drift_rotation(self, context):
+        # Drift bone is directly animated - no property needed
+        pass
+
+
 class ANIM_OT_carClearSteeringWheelsRotation(bpy.types.Operator):
     bl_idname = "anim.car_clear_steering_wheels_rotation"
     bl_label = "Clear baked animation"
-    bl_description = "Clear generated rotation for steering and wheels"
+    bl_description = "Clear generated rotation for steering, drift, and wheels"
     bl_options = {'REGISTER', 'UNDO'}
 
     clear_steering: bpy.props.BoolProperty(name="Steering", description="Clear generated animation for steering",
                                            default=True)
     clear_wheels: bpy.props.BoolProperty(name="Wheels", description="Clear generated animation for wheels",
                                          default=True)
+    clear_drift: bpy.props.BoolProperty(name="Drift", description="Clear generated animation for drift",
+                                        default=True)
 
     def draw(self, context):
         self.layout.use_property_decorate = False
         self.layout.label(text='Clear generated keyframes for')
         self.layout.prop(self, property='clear_steering')
         self.layout.prop(self, property='clear_wheels')
+        self.layout.prop(self, property='clear_drift')
 
     @classmethod
     def poll(cls, context):
@@ -709,11 +797,13 @@ class ANIM_OT_carClearSteeringWheelsRotation(bpy.types.Operator):
 def register():
     bpy.utils.register_class(ANIM_OT_carWheelsRotationBake)
     bpy.utils.register_class(ANIM_OT_carSteeringBake)
+    bpy.utils.register_class(ANIM_OT_carDriftBake)
     bpy.utils.register_class(ANIM_OT_carClearSteeringWheelsRotation)
 
 
 def unregister():
     bpy.utils.unregister_class(ANIM_OT_carClearSteeringWheelsRotation)
+    bpy.utils.unregister_class(ANIM_OT_carDriftBake)
     bpy.utils.unregister_class(ANIM_OT_carSteeringBake)
     bpy.utils.unregister_class(ANIM_OT_carWheelsRotationBake)
 

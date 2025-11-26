@@ -103,6 +103,20 @@ def create_rotation_euler_x_driver(ob, bone, driver_data_path):
     targ.data_path = driver_data_path
 
 
+def create_rotation_euler_z_driver(ob, bone, driver_data_path):
+    fcurve = bone.driver_add('rotation_euler', 2)
+    drv = fcurve.driver
+    drv.type = 'AVERAGE'
+    var = drv.variables.new()
+    var.name = 'rotationAngle'
+    var.type = 'SINGLE_PROP'
+
+    targ = var.targets[0]
+    targ.id_type = 'OBJECT'
+    targ.id = ob
+    targ.data_path = driver_data_path
+
+
 def create_translation_x_driver(ob, bone, driver_data_path):
     fcurve = bone.driver_add('location', 0)
     drv = fcurve.driver
@@ -115,6 +129,20 @@ def create_translation_x_driver(ob, bone, driver_data_path):
     targ.id_type = 'OBJECT'
     targ.id = ob
     targ.data_path = driver_data_path
+
+
+def create_custom_property_from_bone_rotation_z_driver(ob, property_name, bone):
+    fcurve = ob.driver_add(f'["{property_name}"]')
+    drv = fcurve.driver
+    drv.type = 'AVERAGE'
+    var = drv.variables.new()
+    var.name = 'rotationAngle'
+    var.type = 'SINGLE_PROP'
+
+    targ = var.targets[0]
+    targ.id_type = 'OBJECT'
+    targ.id = ob
+    targ.data_path = f'pose.bones["{bone.name}"].rotation_euler[2]'
 
 
 def create_bone_group(pose, group_name, color_set, bone_names):
@@ -299,6 +327,69 @@ def dispatch_bones_to_armature_layers(ob):
             if re_door_trunk.match(b.name) and not b.name.startswith(('DEF_', 'MCH_', 'SHP_')):
                 layer_5.assign(b)
                 coll_door_trunk.assign(b)
+
+
+def set_edit_mode_bone_colors(ob):
+    """Set bone colors for edit mode only, based on bone types.
+    
+    Colors visible only in edit mode:
+    - suspension: 09 theme color set
+    - groundsensor_ and groundsensor_axle_: 02 theme color set
+    - Wheel_FL, Wheel_FR, Wheel_BL, Wheel_BR: 03 theme color set
+    - root and drift: 04 theme color set
+    - steering: 03 theme color set
+    - door_ and trunk_: 05 theme color set
+    - all others: default color set
+    """
+    edit_bones = ob.data.edit_bones
+    
+    # Theme color mapping
+    theme_colors = {
+        'THEME02': 2,  # GroundSensor
+        'THEME03': 3,  # Wheel/Steering
+        'THEME04': 4,  # Root/Drift
+        'THEME05': 5,  # Door/Trunk
+        'THEME09': 9,  # Suspension
+    }
+    
+    for bone in edit_bones:
+        # Determine which color set this bone should use
+        color_set = None
+        bone_name_lower = bone.name.lower()
+        
+        # Check suspension bones
+        if 'suspension' in bone_name_lower:
+            color_set = 'THEME09'
+        
+        # Check ground sensor bones
+        elif 'groundsensor' in bone_name_lower or bone.name.startswith('GroundSensor_Axle'):
+            color_set = 'THEME02'
+        
+        # Check wheel bones (Wheel_FL, Wheel_FR, Wheel_BL, Wheel_BR)
+        elif bone.name in ('Wheel_FL_0', 'Wheel_FR_0', 'Wheel_BL_0', 'Wheel_BR_0') or \
+             any(bone.name.startswith(f'Wheel_{pos}_') for pos in ['FL', 'FR', 'BL', 'BR']):
+            color_set = 'THEME03'
+        
+        # Check steering bones
+        elif bone.name == 'Steering' or 'steering' in bone_name_lower:
+            color_set = 'THEME03'
+        
+        # Check root and drift
+        elif bone.name in ('Root', 'Drift', 'SHP_Root', 'SHP_Drift'):
+            color_set = 'THEME04'
+        
+        # Check door and trunk bones
+        elif bone.name.startswith(('Door_', 'Trunk_', 'Hood_', 'Hatch_', 'Tailgate_')):
+            color_set = 'THEME05'
+        
+        # Apply color if determined
+        if color_set:
+            # Set both the color palette (for Blender 3.2+) and bone_color.palette
+            try:
+                bone.color.palette = color_set
+            except:
+                # Fallback for older Blender versions
+                pass
 
 
 class NameSuffix(object):
@@ -666,6 +757,11 @@ class ArmatureGenerator(object):
 
             self.generate_bone_groups()
             dispatch_bones_to_armature_layers(self.ob)
+            
+            # Set bone colors for edit mode display
+            bpy.ops.object.mode_set(mode='EDIT')
+            set_edit_mode_bone_colors(self.ob)
+            bpy.ops.object.mode_set(mode='POSE')
         finally:
             self.ob.location += location
 
@@ -674,10 +770,8 @@ class ArmatureGenerator(object):
 
         body = amt.edit_bones['DEF_Body']
         root = amt.edit_bones.new('Root')
-        # Origin at center of body (X, Y) with Z=0
-        # Calculate center from body bounding box X, and wheel positions for Y
-        root.head.x = self.dimension.bb_body.center.x
-        root.head.y = (self.dimension.min_y + self.dimension.max_y) / 2
+        # Position head at the head of SHP_GroundSensor_Axle_B (wheels_back_position)
+        root.head = self.dimension.wheels_back_position
         root.head.z = 0
         root.tail = root.head
         root.tail.y += max(self.dimension.length / 1.95, self.dimension.width * 1.1)
@@ -822,9 +916,8 @@ class ArmatureGenerator(object):
         axis.parent = suspension_ft
 
         mch_body = amt.edit_bones.new('MCH_Body')
-        mch_body.head = body.head
-        mch_body.tail = body.tail
-        mch_body.tail.y += 1
+        mch_body.head = mathutils.Vector((0, 0, 0))  # Position at armature origin
+        mch_body.tail = mathutils.Vector((0, 1, 0))  # Point along Y axis
         mch_body.use_deform = False
         mch_body.parent = axis
 
@@ -1232,6 +1325,7 @@ class ArmatureGenerator(object):
             cns.use_offset = True
             cns.owner_space = 'LOCAL'
             cns.target_space = 'LOCAL'
+            cns.influence = 1.0  # Disable drift affecting steering - keeps wheels pointing straight
 
         mch_body = self.ob.pose.bones['MCH_Body']
         cns = mch_body.constraints.new('TRANSFORM')
@@ -1287,6 +1381,20 @@ class ArmatureGenerator(object):
                 cns.max_z = math.radians(max_angle)
                 cns.owner_space = 'LOCAL'
                 cns.use_transform_limit = True  # Affect transform (legacy behavior)
+                
+                # Add child_of constraint for door/trunk attachment to armature
+                cns_child = door.constraints.new('CHILD_OF')
+                cns_child.name = 'tq_Armature-Attachment'
+                cns_child.target = self.ob
+                cns_child.subtarget = 'DEF_Body'  # Reference the body bone
+                cns_child.inverse_matrix = self.ob.data.bones['DEF_Body'].matrix_local.inverted()
+                cns_child.use_location_x = True
+                cns_child.use_location_y = True
+                cns_child.use_location_z = True
+                cns_child.use_rotation_x = True
+                cns_child.use_rotation_y = True
+                cns_child.use_rotation_z = True
+                
                 # Set widget and properties
                 door.custom_shape = get_widget('WGT-CarRig.DoorTrunk')
                 door.custom_shape_scale_xyz = (0.2, 0.2, 0.2)  # Smaller circle
@@ -1307,6 +1415,20 @@ class ArmatureGenerator(object):
                 cns.max_x = 0
                 cns.owner_space = 'LOCAL'
                 cns.use_transform_limit = True  # Affect transform (legacy behavior)
+                
+                # Add child_of constraint for trunk attachment to armature
+                cns_child = bone.constraints.new('CHILD_OF')
+                cns_child.name = 'tq_Armature-Attachment'
+                cns_child.target = self.ob
+                cns_child.subtarget = 'DEF_Body'  # Reference the body bone
+                cns_child.inverse_matrix = self.ob.data.bones['DEF_Body'].matrix_local.inverted()
+                cns_child.use_location_x = True
+                cns_child.use_location_y = True
+                cns_child.use_location_z = True
+                cns_child.use_rotation_x = True
+                cns_child.use_rotation_y = True
+                cns_child.use_rotation_z = True
+                
                 # Set widget directly on bone with translation to position at head
                 bone.custom_shape = get_widget('WGT-CarRig.DoorTrunk')
                 bone.custom_shape_scale_xyz = (0.2, 0.2, 0.2)  # Smaller circle
@@ -1506,18 +1628,11 @@ class ArmatureGenerator(object):
         cns.owner_space = 'LOCAL'
         cns.target_space = 'LOCAL'
 
-        # MCH_Brake bones have NO constraints - constraints are only on Brake control bones
-        mch_brake = pose.bones.get(name_suffix.name('MCH_Brake'))
-        if mch_brake is not None:
-            # MCH_Brake has no constraints - just set rotation mode for potential use
-            mch_brake.rotation_mode = "XYZ"
-
         mch_wheel_rotation = pose.bones[name_suffix.name('MCH_WheelRotation')]
         mch_wheel_rotation.rotation_mode = "XYZ"
-        # Drive the Wheel control bone directly, not MCH_WheelRotation
-        # Use Traffiq property name: tq_WheelRotation_FR_0, etc.
-        wheel_prop_ref = f'tq_WheelRotation_{name_suffix.value}'
-        create_rotation_euler_x_driver(self.ob, wheel, f'["{wheel_prop_ref}"]')
+        self.generate_childof_constraint(mch_wheel_rotation, ground_sensor)
+        wheel_prop_name = f'tq_WheelRotation_{name_suffix.value}'
+        create_rotation_euler_x_driver(self.ob, mch_wheel_rotation, f'["{wheel_prop_name}"]')
 
     def generate_constraints_on_wheel_damper(self, wheel_dimension):
         pose = self.ob.pose
@@ -1596,10 +1711,10 @@ class ArmatureGenerator(object):
 
     def set_origin(self, scene):
         object_location = self.ob.location[:]
-        root = self.ob.data.bones.get('Root')
-        if root:
+        shp_root = self.ob.data.bones.get('SHP_Root')
+        if shp_root:
             cursor_location = scene.cursor.location[:]
-            scene.cursor.location = root.head
+            scene.cursor.location = shp_root.head
             try:
                 bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
             finally:
@@ -1750,10 +1865,14 @@ class OBJECT_OT_armatureCarDeformationRig(bpy.types.Operator):
 
     def execute(self, context):
         """Creates the meta rig with basic bones"""
-        amt = bpy.data.armatures.new('Car Rig Data')
+        # Determine rig name based on body mesh name (exclude "_Body" suffix)
+        body_obj_name = self.target_objects_name.get('Body', 'Car')
+        rig_name = body_obj_name.replace('_Body', '') if body_obj_name.endswith('_Body') else body_obj_name
+        
+        amt = bpy.data.armatures.new(f'{rig_name}')
         amt['Car Rig'] = False
 
-        rig = bpy_extras.object_utils.object_data_add(context, amt, name='Car Rig')
+        rig = bpy_extras.object_utils.object_data_add(context, amt, name=rig_name)
         
         # Ensure the rig object is active and in the correct context
         context.view_layer.objects.active = rig
@@ -1832,17 +1951,29 @@ class OBJECT_OT_armatureCarDeformationRig(bpy.types.Operator):
                     target_obj.parent_type = 'BONE'
                     
                     print(f"Bone-parented {target_obj_name} to DEF_Body")
+            
+            elif dt_name == 'Body' or dt_name.startswith(('Wheel_', 'Brake_')):
+                if target_obj_name in bpy.context.scene.objects:
+                    target_obj = bpy.context.scene.objects[target_obj_name]
+                    target_obj.parent = rig
+                    target_obj.parent_bone = 'DEF_' + dt_name
+                    target_obj.parent_type = 'BONE'
+                    bone = rig.data.bones['DEF_' + dt_name]
+                    target_obj.matrix_parent_inverse = (rig.matrix_world @ mathutils.Matrix.Translation(bone.tail_local)).inverted()
+                    print(f"Bone-parented {target_obj_name} to DEF_{dt_name}")
 
         return {'FINISHED'}
 
     def _create_bone(self, rig, name, delta_pos):
         b = rig.data.edit_bones.new('DEF_' + name)
 
-        b.head = self.bones_position[name] + delta_pos
-        b.tail = b.head
         if name == 'Body':
-            b.tail.y += b.tail.z * 4
+            # Position DEF_Body at origin for smart placement
+            b.head = mathutils.Vector((0, 0, 0))
+            b.tail = mathutils.Vector((0, 1, 0))
         else:
+            b.head = self.bones_position[name] + delta_pos
+            b.tail = b.head
             b.tail.y += b.tail.z
 
         target_obj_name = self.target_objects_name.get(name)
@@ -1852,11 +1983,10 @@ class OBJECT_OT_armatureCarDeformationRig(bpy.types.Operator):
                 b.tail = b.head
                 b.tail.y += target_obj.dimensions[1] / 2 if target_obj.dimensions and target_obj.dimensions[
                     0] != 0 else 1
-            target_obj.parent = rig
-            target_obj.parent_bone = b.name
-            target_obj.parent_type = 'BONE'
-            target_obj.location += rig.matrix_world.to_translation()
-            target_obj.matrix_parent_inverse = (rig.matrix_world @ mathutils.Matrix.Translation(b.tail)).inverted()
+                # Adjust mesh position to stay in place since DEF_Body is at origin
+                original_mesh_pos = self.bones_position[name] + delta_pos
+                target_obj.location = original_mesh_pos
+            # Parenting will be done after mode_set to OBJECT
 
         return b
 
@@ -1877,18 +2007,9 @@ class POSE_OT_carAnimationRigGenerate(bpy.types.Operator):
     bl_description = "Creates the complete armature for animating the car."
     bl_options = {'REGISTER', 'UNDO'}
 
-    adjust_origin: bpy.props.BoolProperty(name='Move origin',
-                                          description='Set origin of the armature at the same location as the root bone',
-                                          default=True)
-
     @classmethod
     def poll(cls, context):
         return context.object is not None and context.object.data is not None and 'Car Rig' in context.object.data
-
-    def draw(self, context):
-        self.layout.use_property_split = True
-        self.layout.use_property_decorate = False
-        self.layout.prop(self, 'adjust_origin')
 
     def execute(self, context):
         if context.object.data['Car Rig']:
@@ -1900,7 +2021,7 @@ class POSE_OT_carAnimationRigGenerate(bpy.types.Operator):
             return {"CANCELLED"}
 
         armature_generator = ArmatureGenerator(context.object)
-        armature_generator.generate(context.scene, self.adjust_origin)
+        armature_generator.generate(context.scene, context.scene.tq_adjust_origin)
         return {"FINISHED"}
 
 
@@ -1973,6 +2094,15 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
 
     CONSTRAINT_NAME = "tq_follow_path"
 
+    animation_mode: bpy.props.EnumProperty(
+        name="Animation Mode",
+        description="Choose between frame-based or speed-based animation",
+        items=[
+            ('FRAMES', "Frame Range", "Define animation using start and end frames"),
+            ('SPEED', "Speed (km/h)", "Define animation using speed in kilometers per hour")
+        ],
+        default='FRAMES'
+    )
     frame_start: bpy.props.IntProperty(
         name="Start Frame",
         description="Frame where the animation starts",
@@ -1985,10 +2115,23 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
         min=1,
         default=240
     )
+    speed_kmh: bpy.props.FloatProperty(
+        name="Speed (km/h)",
+        description="Speed of the car in kilometers per hour",
+        min=0.1,
+        max=500.0,
+        default=50.0,
+        precision=1
+    )
     auto_bake_steering: bpy.props.BoolProperty(
         name="Bake Steering",
         description="Automatically bake steering animation",
         default=True
+    )
+    auto_bake_drift: bpy.props.BoolProperty(
+        name="Bake Drift",
+        description="Automatically bake drift animation",
+        default=False
     )
     auto_bake_wheels: bpy.props.BoolProperty(
         name="Bake Wheel Rotation",
@@ -2002,7 +2145,7 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
     )
     clear_bake: bpy.props.BoolProperty(
         name="Clear Bake and Animation",
-        description="Clear all existing steering and wheel rotation animations before setting up follow path",
+        description="Clear all existing steering, drift, and wheel rotation animations before setting up follow path",
         default=True
     )
 
@@ -2020,12 +2163,38 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        layout.label(text="Frame Range:", icon='TIME')
-        layout.prop(self, "frame_start")
-        layout.prop(self, "frame_end")
+        
+        layout.label(text="Animation Mode:", icon='TIME')
+        layout.prop(self, "animation_mode", text="")
+        layout.separator()
+        
+        if self.animation_mode == 'FRAMES':
+            layout.label(text="Frame Range:", icon='KEYFRAME')
+            layout.prop(self, "frame_start")
+            layout.prop(self, "frame_end")
+        else:  # SPEED mode
+            layout.label(text="Speed Settings:", icon='DRIVER')
+            layout.prop(self, "speed_kmh")
+            layout.prop(self, "frame_start", text="Start Frame")
+            
+            # Show calculated end frame
+            curve = context.scene.tq_target_path_object
+            if curve and curve.type == 'CURVE':
+                curve_length = self.get_curve_length(curve)
+                fps = context.scene.render.fps
+                calculated_end = self.calculate_end_frame_from_speed(
+                    self.frame_start, curve_length, self.speed_kmh, fps
+                )
+                box = layout.box()
+                box.label(text=f"Curve Length: {curve_length:.2f} m")
+                box.label(text=f"Calculated End Frame: {calculated_end}")
+            else:
+                layout.label(text="No valid curve selected", icon='ERROR')
+        
         layout.separator()
         layout.label(text="Animation Setup:", icon='ANIM')
         layout.prop(self, "auto_bake_steering")
+        layout.prop(self, "auto_bake_drift")
         layout.prop(self, "auto_bake_wheels")
         layout.prop(self, "auto_reset_transforms")
         layout.separator()
@@ -2043,6 +2212,19 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
         if curve is None:
             self.report({'ERROR'}, "No target path selected!")
             return {'CANCELLED'}
+        
+        if curve.type != 'CURVE':
+            self.report({'ERROR'}, "Target path must be a curve object!")
+            return {'CANCELLED'}
+
+        # Calculate frame_end based on animation mode
+        if self.animation_mode == 'SPEED':
+            curve_length = self.get_curve_length(curve)
+            fps = context.scene.render.fps
+            self.frame_end = self.calculate_end_frame_from_speed(
+                self.frame_start, curve_length, self.speed_kmh, fps
+            )
+            self.report({'INFO'}, f"Curve length: {curve_length:.2f}m, End frame: {self.frame_end} (Speed: {self.speed_kmh} km/h)")
 
         # Switch to POSE mode if needed
         if context.object.mode != 'POSE':
@@ -2106,6 +2288,7 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
                 from . import bake_operators
                 clearer = bake_operators.ANIM_OT_carClearSteeringWheelsRotation()
                 clearer.clear_steering = True
+                clearer.clear_drift = True
                 clearer.clear_wheels = True
                 clearer.execute(context)
             except Exception as e:
@@ -2120,7 +2303,11 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
         if self.auto_bake_steering:
             return bpy.ops.anim.car_steering_bake('INVOKE_DEFAULT')
         
-        # Chain to wheel rotation bake dialog if requested (and steering not selected)
+        # Chain to drift bake dialog if requested
+        elif self.auto_bake_drift:
+            return bpy.ops.anim.car_drift_bake('INVOKE_DEFAULT')
+        
+        # Chain to wheel rotation bake dialog if requested
         elif self.auto_bake_wheels:
             return bpy.ops.anim.car_wheels_rotation_bake('INVOKE_DEFAULT')
         
@@ -2197,6 +2384,79 @@ class POSE_OT_carFollowPath(bpy.types.Operator):
     @staticmethod
     def get_offset_data_path(root_bone_name, fp_constraint_name):
         return f'pose.bones["{root_bone_name}"].constraints["{fp_constraint_name}"].offset_factor'
+    
+    @staticmethod
+    def get_curve_length(curve_object):
+        """Calculate the total length of a curve object in Blender units (meters)."""
+        if curve_object.type != 'CURVE':
+            return 0.0
+        
+        total_length = 0.0
+        for spline in curve_object.data.splines:
+            # Calculate length by sampling points along the spline
+            if spline.type == 'BEZIER':
+                # For Bezier curves, approximate by summing bezier point distances
+                # This is a simple approximation - for more accuracy, we'd need to sample the curve
+                points = [bp.co for bp in spline.bezier_points]
+                for i in range(len(points) - 1):
+                    total_length += (points[i+1] - points[i]).length
+                
+                # Add closing segment if cyclic
+                if spline.use_cyclic_u and len(points) > 1:
+                    total_length += (points[0] - points[-1]).length
+                    
+            elif spline.type == 'NURBS':
+                # For NURBS curves, use point distances
+                points = [p.co.xyz for p in spline.points]
+                for i in range(len(points) - 1):
+                    total_length += (points[i+1] - points[i]).length
+                
+                # Add closing segment if cyclic
+                if spline.use_cyclic_u and len(points) > 1:
+                    total_length += (points[0] - points[-1]).length
+                    
+            elif spline.type == 'POLY':
+                # For poly curves, use point distances
+                points = [p.co.xyz for p in spline.points]
+                for i in range(len(points) - 1):
+                    total_length += (points[i+1] - points[i]).length
+                
+                # Add closing segment if cyclic
+                if spline.use_cyclic_u and len(points) > 1:
+                    total_length += (points[0] - points[-1]).length
+        
+        # Apply object scale
+        scale = curve_object.matrix_world.to_scale()
+        avg_scale = (scale.x + scale.y + scale.z) / 3.0
+        
+        return total_length * avg_scale
+    
+    @staticmethod
+    def calculate_end_frame_from_speed(start_frame, curve_length_m, speed_kmh, fps):
+        """Calculate end frame based on curve length and desired speed.
+        
+        Args:
+            start_frame: Starting frame number
+            curve_length_m: Length of curve in meters
+            speed_kmh: Desired speed in kilometers per hour
+            fps: Frames per second from scene settings
+        
+        Returns:
+            Calculated end frame (int)
+        """
+        if speed_kmh <= 0:
+            return start_frame + 240  # Default fallback
+        
+        # Convert km/h to m/s
+        speed_ms = speed_kmh / 3.6
+        
+        # Calculate time in seconds to traverse the curve
+        time_seconds = curve_length_m / speed_ms
+        
+        # Convert to frames
+        duration_frames = int(time_seconds * fps)
+        
+        return start_frame + max(1, duration_frames)
 
     def setup_follow_path_constraint(self, root_bone, target_obj):
         follow_path_constraint = root_bone.constraints.get(self.CONSTRAINT_NAME)
@@ -2243,6 +2503,11 @@ class POSE_OT_carClearFollowPathAnimation(bpy.types.Operator):
         description="Remove all steering bake keyframes",
         default=True
     )
+    clear_drift: bpy.props.BoolProperty(
+        name="Clear Drift Animation",
+        description="Remove all drift bake keyframes",
+        default=True
+    )
     clear_wheels: bpy.props.BoolProperty(
         name="Clear Wheel Rotation Animation",
         description="Remove all wheel rotation bake keyframes",
@@ -2266,6 +2531,7 @@ class POSE_OT_carClearFollowPathAnimation(bpy.types.Operator):
         layout.label(text="Clear Animations:", icon='TRASH')
         layout.prop(self, "clear_follow_path")
         layout.prop(self, "clear_steering")
+        layout.prop(self, "clear_drift")
         layout.prop(self, "clear_wheels")
 
     def execute(self, context):
@@ -2307,11 +2573,25 @@ class POSE_OT_carClearFollowPathAnimation(bpy.types.Operator):
                 from . import bake_operators
                 clearer = bake_operators.ANIM_OT_carClearSteeringWheelsRotation()
                 clearer.clear_steering = True
+                clearer.clear_drift = False
                 clearer.clear_wheels = False
                 clearer.execute(context)
                 self.report({'INFO'}, "Cleared steering animation")
             except Exception as e:
                 self.report({'WARNING'}, f"Failed to clear steering animation: {str(e)}")
+
+        # Clear drift animation
+        if self.clear_drift:
+            try:
+                from . import bake_operators
+                clearer = bake_operators.ANIM_OT_carClearSteeringWheelsRotation()
+                clearer.clear_steering = False
+                clearer.clear_drift = True
+                clearer.clear_wheels = False
+                clearer.execute(context)
+                self.report({'INFO'}, "Cleared drift animation")
+            except Exception as e:
+                self.report({'WARNING'}, f"Failed to clear drift animation: {str(e)}")
 
         # Clear wheel rotation animation
         if self.clear_wheels:
@@ -2319,6 +2599,7 @@ class POSE_OT_carClearFollowPathAnimation(bpy.types.Operator):
                 from . import bake_operators
                 clearer = bake_operators.ANIM_OT_carClearSteeringWheelsRotation()
                 clearer.clear_steering = False
+                clearer.clear_drift = False
                 clearer.clear_wheels = True
                 clearer.execute(context)
                 self.report({'INFO'}, "Cleared wheel rotation animation")
@@ -2349,6 +2630,11 @@ def register():
         description="Object representing the ground to be used in animation of rigged car",
         type=bpy.types.Object,
     )
+    bpy.types.Scene.tq_adjust_origin = bpy.props.BoolProperty(
+        name="Move Origin",
+        description="Set origin of the armature at the same location as the SHP_Root bone",
+        default=True
+    )
     bpy.types.Scene.tq_follow_path_bake_wheels = bpy.props.BoolProperty(
         name="Follow Path Bake Wheels",
         description="Internal flag: whether to chain to wheel rotation baking after steering bake",
@@ -2376,6 +2662,8 @@ def unregister():
         del bpy.types.Scene.tq_follow_path_bake_wheels
     if hasattr(bpy.types.Scene, 'tq_ground_object'):
         del bpy.types.Scene.tq_ground_object
+    if hasattr(bpy.types.Scene, 'tq_adjust_origin'):
+        del bpy.types.Scene.tq_adjust_origin
     if hasattr(bpy.types.Scene, 'tq_target_path_object'):
         del bpy.types.Scene.tq_target_path_object
     

@@ -29,6 +29,7 @@ from . import mesh_grouper
 _modules = {
 }
 
+
 # Handle reload on script re-execution
 if "bpy" in locals():
     importlib.reload(bake_operators)
@@ -67,10 +68,12 @@ class RIGACAR_PT_mixin:
         return cls.is_car_rig(context) and context.object.data['Car Rig']
 
     def display_generate_section(self, context):
+        self.layout.prop(context.scene, 'tq_adjust_origin')
         self.layout.operator(car_rig.POSE_OT_carAnimationRigGenerate.bl_idname, text='Generate')
 
     def display_bake_section(self, context):
         self.layout.operator(bake_operators.ANIM_OT_carSteeringBake.bl_idname)
+        self.layout.operator(bake_operators.ANIM_OT_carDriftBake.bl_idname)
         self.layout.operator(bake_operators.ANIM_OT_carWheelsRotationBake.bl_idname)
         self.layout.operator(bake_operators.ANIM_OT_carClearSteeringWheelsRotation.bl_idname)
 
@@ -163,21 +166,21 @@ class RIGACAR_PT_animationRigView(bpy.types.Panel, RIGACAR_PT_mixin):
             self.display_generate_section(context)
 
 
-class RIGACAR_PT_wheelsAnimationView(bpy.types.Panel, RIGACAR_PT_mixin):
-    bl_category = "Rigacar"
-    bl_label = "Wheels animation"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
+# class RIGACAR_PT_wheelsAnimationView(bpy.types.Panel, RIGACAR_PT_mixin):
+#     bl_category = "Rigacar"
+#     bl_label = "Wheels animation"
+#     bl_space_type = "VIEW_3D"
+#     bl_region_type = "UI"
 
-    @classmethod
-    def poll(cls, context):
-        return RIGACAR_PT_mixin.is_car_rig_generated(context)
+#     @classmethod
+#     def poll(cls, context):
+#         return RIGACAR_PT_mixin.is_car_rig_generated(context)
 
-    def draw(self, context):
-        # Wheel animation UI cleared - baking/clearing is now handled
-        # directly when running the "Setup Follow Path Animation" operator.
-        # Intentionally left blank to remove manual bake buttons.
-        return
+#     def draw(self, context):
+#         # Wheel animation UI cleared - baking/clearing is now handled
+#         # directly when running the "Setup Follow Path Animation" operator.
+#         # Intentionally left blank to remove manual bake buttons.
+#         return
 
 
 class RIGACAR_PT_groundSensorsView(bpy.types.Panel, RIGACAR_PT_mixin):
@@ -204,7 +207,7 @@ classes = (
     RIGACAR_PT_rigProperties,
     RIGACAR_PT_groundSensorsProperties,
     RIGACAR_PT_animationRigView,
-    RIGACAR_PT_wheelsAnimationView,
+    # RIGACAR_PT_wheelsAnimationView,
     RIGACAR_PT_groundSensorsView,
 )
 
