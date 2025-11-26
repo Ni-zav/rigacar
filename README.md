@@ -6,7 +6,9 @@ _This fork supports **Blender 4.0+** and consolidates fixes from the community w
 
 ## Overview
 
-Rigacar is a Blender addon that generates complete car rigs with animation and deformation controls. It's designed to fulfill the following goals:
+Rigacar is a Blender addon that generates complete car rigs with animation and deformation controls. This fork is inspired by and reverse-engineered from [Traffiq](https://polygoniq.com/software/traffiq/) by Polygoniq, adapting its rigging and animation concepts for the open-source Rigacar addon.
+
+It's designed to fulfill the following goals:
 
 * Generate a complete rig in seconds for standard car models
 * Automate wheel and steering animations with multiple baking strategies
